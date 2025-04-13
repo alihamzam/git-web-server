@@ -1,0 +1,19 @@
+listen: 127.0.0.1:9000
+repos:
+  - name: my-repo 
+    url: https://github.com/username/repo.git
+    revision: main
+    auth:
+      username: username
+      password: password_or_access_token
+    poll: 1m
+    webhook: true
+    files:
+      - config: my-path/my-file.yaml
+        path: /my-web-path/my-file
+      - template: my-path/my-template.yaml
+        values: 
+          - key: key_1
+            value: value_1
+        path: /my-web-path/my_compiled_template
+      
