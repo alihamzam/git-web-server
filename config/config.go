@@ -1,4 +1,4 @@
-package main
+package config
 
 import (
 	"errors"
@@ -7,10 +7,12 @@ import (
 	"time"
 
 	"github.com/goccy/go-yaml"
+	"github.com/rs/zerolog/log"
 )
 
 type Config struct {
-	Repos []Repo
+	Listen string
+	Repos  []Repo
 }
 
 type Repo struct {
@@ -18,7 +20,7 @@ type Repo struct {
 	URL      string
 	Revision string
 	Auth     Auth
-	Webhook  string
+	Webhook  bool
 	Poll     time.Duration
 	Files    []File
 }
@@ -26,7 +28,6 @@ type Repo struct {
 type Auth struct {
 	Username string
 	Password string
-	Key      string
 }
 
 type File struct {
@@ -41,8 +42,13 @@ type Value struct {
 	Value any
 }
 
-func Parse(cfgFile string) (*Config, error) {
-	data, err := os.ReadFile(cfgFile)
+func Parse(cfgFile *string) (*Config, error) {
+	if cfgFile == nil || *cfgFile == "" {
+		log.Fatal().Msg("Invalid config file provided")
+	}
+
+	log.Info().Msgf("Parsing conifg file %s", *cfgFile)
+	data, err := os.ReadFile(*cfgFile)
 	if err != nil {
 		return nil, fmt.Errorf("error reading config file: %w", err)
 	}
@@ -53,6 +59,7 @@ func Parse(cfgFile string) (*Config, error) {
 		return nil, fmt.Errorf("error unmarshalling data: %w", err)
 	}
 
+	log.Info().Msg("Validating config")
 	if err = cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -64,6 +71,8 @@ func (c *Config) Validate() error {
 	if len(c.Repos) == 0 {
 		return errors.New("no repos defined")
 	}
+
+	// TODO: Add more validation...?
 
 	return nil
 }
