@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -72,7 +73,27 @@ func (c *Config) Validate() error {
 		return errors.New("no repos defined")
 	}
 
-	// TODO: Add more validation...?
+	for _, repo := range c.Repos {
+		if !repo.Webhook && repo.Poll == 0 {
+			return errors.New("repo webhook not enabled and poll interval is 0")
+		}
+
+		if _, err := url.Parse(repo.URL); err != nil {
+			return fmt.Errorf("invalid URL for repo %s: %w", repo.Name, err)
+		}
+
+		if repo.Revision == "" {
+			return errors.New("repo revision not supplied")
+		}
+
+		if repo.Auth.Username == "" || repo.Auth.Password == "" {
+			return errors.New("repo auth credentials not supplied")
+		}
+
+		if len(repo.Files) == 0 {
+			return errors.New("no repo files supplied")
+		}
+	}
 
 	return nil
 }

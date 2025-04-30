@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"text/template"
 	"time"
@@ -73,26 +74,32 @@ func (g *Git) Run(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config) (
 		repoNames[repoConfig.Name] = struct{}{}
 
 		repo, err := g.clone(&repoConfig)
-
 		if err != nil {
-			return nil, fmt.Errorf("Failed to clone repo %s: %w", repoConfig.Name, err)
+			return nil, fmt.Errorf("failed to clone repo %s: %w", repoConfig.Name, err)
+		}
+
+		if err := g.fetch(repo, true); err != nil {
+			return nil, fmt.Errorf("failed initial fetch from repo %s: %w", repo.config.Name, err)
 		}
 
 		webhookChan := make(chan struct{})
 
 		if repo.config.Webhook {
 			endpoint := "/webhooks/" + repoConfig.Name
-			log.Info().Str("repo", repoConfig.Name).Msgf("Creating webook %s", endpoint)
 			webhooksMap[endpoint] = webhookChan
 		}
+
+		// var ticker *time.Ticker
+		// if repoConfig.Poll != 0 {
+		ticker := time.NewTicker(repoConfig.Poll)
+		// }
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ticker := time.NewTicker(repoConfig.Poll)
 
 			fetch := func() {
-				if err := g.fetch(repo); err != nil {
+				if err := g.fetch(repo, true); err != nil {
 					log.Error().Err(err).Msg("Failed to fetch changes from Git repo")
 				}
 			}
@@ -101,11 +108,12 @@ func (g *Git) Run(ctx context.Context, wg *sync.WaitGroup, cfg *config.Config) (
 				select {
 				case <-ticker.C:
 					log.Info().Msgf("Starting fetch operation for repo %s on poll", repo.config.Name)
-					fetch()
+					go fetch()
 				case <-webhookChan:
 					log.Info().Msgf("Starting fetch operation for repo %s on webhook", repo.config.Name)
-					fetch()
+					go fetch()
 				case <-ctx.Done():
+					ticker.Stop()
 					close(webhookChan)
 					return
 				}
@@ -147,7 +155,7 @@ func (g *Git) clone(repo *config.Repo) (*gitRepo, error) {
 	return gitRepo, nil
 }
 
-func (g *Git) fetch(repo *gitRepo) error {
+func (g *Git) fetch(repo *gitRepo, initial bool) error {
 	err := repo.data.Fetch(&git.FetchOptions{
 		Auth:       repo.auth,
 		RemoteName: "origin",
@@ -159,11 +167,14 @@ func (g *Git) fetch(repo *gitRepo) error {
 		Progress: g.progressWriter,
 	})
 	if err != nil {
-		if errors.Is(err, git.NoErrAlreadyUpToDate) {
+		if !errors.Is(err, git.NoErrAlreadyUpToDate) {
+			return fmt.Errorf("failed to fetch %s: %w", repo.config.Name, err)
+		} else if !initial {
 			// Repo is already up-to-date, no need to continue with fetch operation
+			log.Debug().Msg("Repo already up-to-date")
+
 			return nil
 		}
-		return fmt.Errorf("failed to fetch %s: %w", repo.config.Name, err)
 	}
 
 	commit, err := g.resolveCommit(repo.data, repo.config.Revision)
@@ -179,6 +190,12 @@ func (g *Git) fetch(repo *gitRepo) error {
 		if file.Template != "" {
 			source.File = file.Template
 			source.Template = true
+		}
+
+		if len(file.Path) == 0 || !strings.HasPrefix(file.Path, "/") {
+			log.Warn().Msgf("File %s of repo %s is either empty or does not start with a '/' character, skipping file", source.File, repo.config.Name)
+
+			continue
 		}
 
 		log.Debug().Msg("Locating " + source.File)
@@ -202,7 +219,11 @@ func (g *Git) fetch(repo *gitRepo) error {
 			}
 		}
 
-		g.filesMap.Set(file.Path, contents)
+		g.filesMap.Set("/"+repo.config.Name+file.Path, contents)
+	}
+
+	if len(g.filesMap.GetKeys()) == 0 {
+		log.Warn().Msgf("No files for repo %s were parsable!", repo.config.Name)
 	}
 
 	return nil

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"os/signal"
 	"sync"
@@ -22,6 +23,17 @@ var (
 )
 
 func main() {
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
+
+	if err := Run(sigs); err != nil {
+		log.Fatal().Msg(err.Error())
+	}
+
+	os.Exit(0)
+}
+
+func Run(sigs chan os.Signal) error {
 	zlog.SetGlobalLevel(zlog.InfoLevel)
 
 	log.Info().
@@ -39,20 +51,22 @@ func main() {
 
 	cfg, err := config.Parse(cfgFile)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to parse config")
+		return fmt.Errorf("Failed to parse config: %w", err)
 	}
 
-	// ctx used to signal intent to shutdown
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	// wg used to signal successful shutdown
 	wg := &sync.WaitGroup{}
+	// ctx used to signal intent to shutdown
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 
 	rwMap := pkg.NewRWMap()
 	git := git.New(rwMap)
 
 	webhooks, err := git.Run(ctx, wg, cfg)
 	if err != nil {
-		log.Fatal().Err(err).Msg("Failed to obtain initial git data")
+		cancel()
+
+		return fmt.Errorf("Failed to obtain initial git data: %w", err)
 	}
 
 	webServer := server.New(cfg.Listen, rwMap, webhooks)
@@ -63,8 +77,6 @@ func main() {
 		}
 	}()
 
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	<-sigs
 
 	log.Info().Msg("Shutting down...")
@@ -72,5 +84,5 @@ func main() {
 	cancel()
 	wg.Wait()
 
-	os.Exit(0)
+	return nil
 }
